@@ -9,15 +9,15 @@ The goal of this assignment is to implement by yourself:
 
 Detailed instructions for question 1:
 The nearest neighbor classifier predicts for a point X_i the target y_k of
-the training sample X_k which is the closest to X_i. We measure proximity with
-the Euclidean distance. The model will be evaluated with the accuracy (average
-number of samples corectly classified). You need to implement the `fit`,
-`predict` and `score` methods for this class. The code you write should pass
-the test we implemented. You can run the tests by calling at the root of the
-repo `pytest test_sklearn_questions.py`. Note that to be fully valid, a
-scikit-learn estimator needs to check that the input given to `fit` and
-`predict` are correct using the `validate_data, check_is_fitted` functions
-imported in this file.
+the training sample X_k which is the closest to X_i. We measure proximity
+with the Euclidean distance. The model will be evaluated with the accuracy
+(average number of samples corectly classified). You need to implement the
+`fit`, `predict` and `score` methods for this class. The code you write
+should pass the test we implemented. You can run the tests by calling at
+the root of the repo `pytest test_sklearn_questions.py`. Note that to be
+fully valid, a scikit-learn estimator needs to check that the input given
+to `fit` and `predict` are correct using the `validate_data,
+check_is_fitted` functions imported in this file.
 You can find more information on how they should be used in the following doc:
 https://scikit-learn.org/stable/developers/develop.html#rolling-your-own-estimator.
 Make sure to use them to pass `test_nearest_neighbor_check_estimator`.
@@ -35,7 +35,7 @@ second split to learn december and predict on january etc.
 We also ask you to respect the pep8 convention: https://pep8.org. This will be
 enforced with `flake8`. You can check that there is no flake8 errors by
 calling `flake8` at the root of the repo.
-
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Finally, you need to write docstrings for the methods you code and for the
 class. The docstring will be checked using `pydocstyle` that you can also
 call at the root of the repo.
@@ -58,6 +58,7 @@ from sklearn.model_selection import BaseCrossValidator
 
 from sklearn.utils.validation import check_is_fitted
 from sklearn.utils.validation import validate_data
+from sklearn.utils.multiclass import type_of_target
 from sklearn.metrics.pairwise import pairwise_distances
 
 
@@ -82,6 +83,14 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         self : instance of KNearestNeighbors
             The current instance of the classifier
         """
+        # Validate input data
+        self.X_, self.y_ = validate_data(self, X=X, y=y)
+
+        if type_of_target(self.y_) == 'continuous':
+            raise ValueError("Unknown label type: continuous")
+
+        self.classes_ = np.unique(self.y_)
+
         return self
 
     def predict(self, X):
@@ -97,7 +106,21 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         y : ndarray, shape (n_test_samples,)
             Predicted class labels for each test data sample.
         """
-        y_pred = np.zeros(X.shape[0])
+        # Validate input data
+        check_is_fitted(self)
+        X = validate_data(self, X, reset=False)
+
+        distance_mat = pairwise_distances(X, self.X_, metric='euclidean')
+        n_neighbors_mat = np.argsort(
+            distance_mat, axis=1)[:, :self.n_neighbors]
+
+        y_pred = np.empty(X.shape[0], dtype=self.y_.dtype)
+        for i in range(len(y_pred)):
+            neighbor_indexes = n_neighbors_mat[i]
+            value_mat, vote_mat = np.unique(
+                self.y_[neighbor_indexes], return_counts=True)
+            index_class = np.argmax(vote_mat)
+            y_pred[i] = value_mat[index_class]
         return y_pred
 
     def score(self, X, y):
@@ -115,7 +138,15 @@ class KNearestNeighbors(ClassifierMixin, BaseEstimator):
         score : float
             Accuracy of the model computed for the (X, y) pairs.
         """
-        return 0.
+        # Validate input data
+        check_is_fitted(self)
+        X = validate_data(self, X=X, reset=False)
+
+        y_pred = self.predict(X)
+
+        score = np.mean(y_pred == y)
+
+        return score
 
 
 class MonthlySplit(BaseCrossValidator):
@@ -155,7 +186,24 @@ class MonthlySplit(BaseCrossValidator):
         n_splits : int
             The number of splits.
         """
-        return 0
+        # Retrieve the time_col column from X
+        if self.time_col == 'index':
+            dt_serie = X.index
+        elif self.time_col not in X.columns:
+            raise ValueError
+        else:
+            dt_serie = X[self.time_col]
+
+        if not pd.api.types.is_datetime64_any_dtype(dt_serie):
+            raise ValueError(
+                f"time_col '{self.time_col}' must be datetime type")
+
+        if isinstance(dt_serie, pd.DatetimeIndex):
+            month_count = dt_serie.to_period('M').nunique()
+        else:
+            month_count = dt_serie.dt.to_period('M').nunique()
+
+        return month_count - 1
 
     def split(self, X, y, groups=None):
         """Generate indices to split data into training and test set.
@@ -178,11 +226,21 @@ class MonthlySplit(BaseCrossValidator):
             The testing set indices for that split.
         """
 
-        n_samples = X.shape[0]
         n_splits = self.get_n_splits(X, y, groups)
+        if self.time_col == 'index':
+            dt_serie = X.index
+        else:
+            dt_serie = X[self.time_col]
+
+        if isinstance(dt_serie, pd.DatetimeIndex):
+            month_serie = dt_serie.to_period('M')
+        else:
+            month_serie = dt_serie.dt.to_period('M')
+        unique_months = sorted(month_serie.unique())
+
         for i in range(n_splits):
-            idx_train = range(n_samples)
-            idx_test = range(n_samples)
+            idx_train = np.where(month_serie == unique_months[i])[0]
+            idx_test = np.where(month_serie == unique_months[i+1])[0]
             yield (
                 idx_train, idx_test
             )
